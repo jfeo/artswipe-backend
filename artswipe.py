@@ -7,60 +7,56 @@ from flask_cors import CORS
 app = Flask(__name__)
 CORS(app)
 
-titles = {}
-
-
-def parse_assets(l):
-    try:
-        (collection, asset, title) = l.split(",")
-        titles[f"{collection}-{asset}"] = title
-        return collection, int(asset.rstrip())
-    except:
-        return None
-
 
 def send_json(obj, status_code, headers={}):
     headers['Content-Type'] = 'application/json'
     return json.dumps(obj), status_code, headers
 
 
-assets = []
-with open("assets.csv", "r", encoding="utf-8") as f:
-    assets = [parse_assets(l) for l in f if parse_assets(l) is not None]
-
+assets = {}
 choices = {}
 matches = {}
 check_matches = {}
 
+with open("assets.csv", "r", encoding="utf-8") as f:
+    for line in f:
+        try:
+            (collection, asset, title) = line.split(",")
+            assets[f"natmus-{collection}-{asset}"] = {
+                "inst": "natmus",
+                "collection": collection,
+                "asset": asset,
+                "title": title
+            }
+        except:
+            pass
+
 
 def get_swiped_culture(user, k=10):
-    global choices, titles
+    global choices
     if len([u for u in choices.keys() if u != user]) == 0:
         return None
     [other] = random.sample([u for u in choices.keys() if u != user], 1)
-    [collection] = random.sample(choices[other].keys(), 1)
-    [asset] = random.sample(choices[other][collection].keys(), 1)
+    [assetId] = random.sample(choices[other].keys(), 1)
     if user not in choices or len(choices[user]) == 0:
-        return collection, asset
-    while collection in choices[user].keys(
-    ) and asset in choices[user][collection].keys():
+        return assetId
+    while assetId in choices[user]:
         [other] = random.sample([u for u in choices.keys() if u != user], 1)
-        [collection] = random.sample(choices[other].keys(), 1)
-        [asset] = random.sample(choices[other][collection].keys(), 1)
+        [assetId] = random.sample(choices[other].keys(), 1)
         k -= 1
         if k == 0:
             return None
-    return collection, asset
+    return assetId
 
 
 def get_random_culture(user):
-    global choices
-    [(collection, asset)] = random.sample(assets, 1)
+    global assets, choices
+    [assetId] = random.sample(assets.keys(), 1)
     if user not in choices or len(choices[user]) == 0:
-        return collection, asset
-    while collection in choices[user] and asset in choices[user][collection]:
-        [(collection, asset)] = random.sample(assets, 1)
-    return collection, asset
+        return assetId
+    while assetId in choices[user]:
+        [assetId] = random.sample(assets.keys(), 1)
+    return assetId
 
 
 @app.route('/culture', methods=['GET'])
@@ -69,67 +65,42 @@ def culture():
     if user is None:
         return send_json({"msg": "must log in"}, 401)
     if random.randint(0, 1) == 0:
-        collection, asset = get_random_culture(user)
-        print("Selecting random")
+        assetId = get_random_culture(user)
     else:
-        tup = get_swiped_culture(user)
-        print("Selecting from swiped")
-        if tup is None:
-            print("Falling back to random culture")
-            collection, asset = get_random_culture(user)
-        else:
-            collection, asset = tup
-    #r = requests.get(
-    #    f"http://samlinger.natmus.dk/{collection}/asset/{asset}/json")
-    text = "Beskrivelse"
-    title = titles.get(f"{collection}-{asset}")
-    #if r.status_code == 200:
-    #   data = r.json()
-    #  text = data['text']['da-DK']['description']
-    # title = data['text']['da-DK']['title']
-    data = {
-        'collection': collection,
-        'asset': asset,
-        'title': title,
-        'text': text
-    }
+        assetId = get_swiped_culture(user)
+        if assetId is None:
+            assetId = get_random_culture(user)
+    asset = assets[assetId]
+    data = {}
+    data['assetId'] = assetId
+    data['title'] = asset['title']
+    data['thumb'] = ("http://samlinger.natmus.dk/"
+                     f"{asset['collection']}/asset/"
+                     f"{asset['asset']}/thumbnail/500")
     return send_json(data, 200)
 
 
 @app.route('/choose', methods=['GET'])
 def choose():
     global choices
-    args = ["user", "collection", "asset", "choice"]
-    if any([arg not in request.args for arg in args]):
-        return json.dumps({
-            "msg": "parameter missing"
-        }), 401, {
-            'Content-Type': 'application/json'
-        }
     user = request.args.get('user')
-    collection = request.args.get('collection')
-    try:
-        asset = int(request.args.get('asset'))
-    except Exception:
-        return send_json({"msg": "asset id malformed"}, 401)
+    assetId = request.args.get('assetId')
     choice = request.args.get('choice')
+    if any(map(lambda arg: arg is None, [user, assetId, choice])):
+        return send_json({"msg": "parameter missing"}, 401)
     if user not in choices:
         choices[user] = {}
-    if collection not in choices[user]:
-        choices[user][collection] = {}
-    choices[user][collection][asset] = choice
-    compute_matches(user, collection, asset, choice)
+    choices[user][assetId] = choice
+    compute_matches(user, assetId, choice)
     return send_json({"msg": "choice made"}, 200)
 
 
-def compute_matches(user, collection, asset, choice):
+def compute_matches(user, assetId, choice):
     global matches, choices
     for match in [u for u in choices.keys() if u != user]:
-        if collection not in choices[match].keys():
+        if assetId not in choices[match]:
             continue
-        if asset not in choices[match][collection].keys():
-            continue
-        match_choice = choices[match][collection][asset]
+        matchChoice = choices[match][assetId]
         if user not in matches:
             matches[user] = {}
         if match not in matches[user]:
@@ -138,7 +109,7 @@ def compute_matches(user, collection, asset, choice):
             matches[match] = {}
         if user not in matches[match]:
             matches[match][user] = {"same": 0, "not": 0}
-        if choice == match_choice:
+        if choice == matchChoice:
             matches[user][match]["same"] += 1
             matches[match][user]["same"] += 1
         else:
@@ -153,7 +124,11 @@ def match():
     if user is None:
         return send_json({"msg": f"user missing"}, 401)
     if user not in matches:
-        return send_json([], 200)
+        return send_json({
+            "lost_matches": [],
+            "new_matches": [],
+            "all_matches": []
+        }, 200)
 
     def sortkey(p):
         m, s = p
@@ -161,7 +136,6 @@ def match():
 
     ls = [(m, s) for (m, s) in matches[user].items()
           if s['same'] - s['not'] > 3]
-    print(ls)
     if user not in check_matches:
         check_matches[user] = []
     all_matches = list(map(lambda p: p[0], sorted(ls, key=sortkey)))
