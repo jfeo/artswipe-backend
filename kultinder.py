@@ -68,7 +68,7 @@ def culture():
     user = request.args.get('user')
     if user is None:
         return send_json({"msg": "must log in"}, 401)
-    if random.randint(0, 10) == 0:
+    if random.randint(0, 1) == 0:
         collection, asset = get_random_culture(user)
         print("Selecting random")
     else:
@@ -160,7 +160,7 @@ def match():
         return s["same"] - s["not"]
 
     ls = [(m, s) for (m, s) in matches[user].items()
-          if s['same'] - s['not'] > 0]
+          if s['same'] - s['not'] > 3]
     print(ls)
     if user not in check_matches:
         check_matches[user] = []
