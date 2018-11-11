@@ -25,9 +25,8 @@ def send_json(obj, status_code, headers={}):
 
 
 assets = []
-with open("assets.csv", "r") as f:
+with open("assets.csv", "r", encoding="utf-8") as f:
     assets = [parse_assets(l) for l in f if parse_assets(l) is not None]
-print(titles)
 
 choices = {}
 matches = {}
@@ -204,7 +203,7 @@ def load():
     global choices, matches
     try:
         fname = request.args.get('fname') or 'dump.json'
-        with open(fname, "r") as f:
+        with open(fname, "r", encoding="utf-8") as f:
             dump = json.load(f)
             choices = dump['choices']
             matches = dump['matches']
@@ -217,6 +216,10 @@ def load():
 def save():
     global choices, matches
     fname = request.args.get('fname') or 'dump.json'
-    with open(fname, 'w') as f:
+    with open(fname, 'w', encoding="utf-8") as f:
         json.dump({'choices': choices, 'matches': matches}, f)
     return send_json({"msg:": f"saved to '{fname}'"}, 200)
+
+
+if __name__ == '__main__':
+    app.run(debug=True, host='0.0.0.0')
