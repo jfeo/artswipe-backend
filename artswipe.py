@@ -1,78 +1,86 @@
-from flask import Flask, request
+"""artswipe backend
+author: jfeo
+email: jensfeodor@gmail.com
+"""
 import random
 import json
-import requests
-import heapq
+
+from flask import Flask, request
 from flask_cors import CORS
-app = Flask(__name__)
-CORS(app)
+APP = Flask(__name__)
+CORS(APP)
+
+ASSETS = {}
+CHOICES = {}
+MATCHES = {}
+CHECK_MATCHES = {}
 
 
 def send_json(obj, status_code, headers={}):
+    """Create the response tuple with, automatically dumping the given object to a json string, and
+    setting the Content-Type header appropriately."""
     headers['Content-Type'] = 'application/json'
     return json.dumps(obj), status_code, headers
 
 
-assets = {}
-choices = {}
-matches = {}
-check_matches = {}
-
-with open("assets.csv", "r", encoding="utf-8") as f:
-    for line in f:
-        try:
-            (collection, asset, title) = line.split(",")
-            assets[f"natmus-{collection}-{asset}"] = {
-                "inst": "natmus",
-                "collection": collection,
-                "asset": asset,
-                "title": title
-            }
-        except:
-            pass
+def setup():
+    """Setup the server"""
+    with open("assets.csv", "r", encoding="utf-8") as file:
+        for line in file:
+            try:
+                (collection, asset, title) = line.split(",")
+                ASSETS[f"natmus-{collection}-{asset}"] = {
+                    "inst": "natmus",
+                    "collection": collection,
+                    "asset": asset,
+                    "title": title
+                }
+            except ValueError:
+                pass
 
 
 def get_swiped_culture(user, k=10):
-    global choices
-    if len([u for u in choices.keys() if u != user]) == 0:
+    """Get a culture item that has been swiped already by another user."""
+    if not [u for u in CHOICES.keys() if u != user]:
         return None
-    [other] = random.sample([u for u in choices.keys() if u != user], 1)
-    [assetId] = random.sample(choices[other].keys(), 1)
-    if user not in choices or len(choices[user]) == 0:
-        return assetId
-    while assetId in choices[user]:
-        [other] = random.sample([u for u in choices.keys() if u != user], 1)
-        [assetId] = random.sample(choices[other].keys(), 1)
+    [other] = random.sample([u for u in CHOICES.keys() if u != user], 1)
+    [asset_id] = random.sample(CHOICES[other].keys(), 1)
+    if user not in CHOICES or not CHOICES[user]:
+        return asset_id
+    while asset_id in CHOICES[user]:
+        [other] = random.sample([u for u in CHOICES.keys() if u != user], 1)
+        [asset_id] = random.sample(CHOICES[other].keys(), 1)
         k -= 1
         if k == 0:
             return None
-    return assetId
+    return asset_id
 
 
 def get_random_culture(user):
-    global assets, choices
-    [assetId] = random.sample(assets.keys(), 1)
-    if user not in choices or len(choices[user]) == 0:
-        return assetId
-    while assetId in choices[user]:
-        [assetId] = random.sample(assets.keys(), 1)
-    return assetId
+    """Get a culture item by random sampling."""
+    [asset_id] = random.sample(ASSETS.keys(), 1)
+    if user not in CHOICES or not CHOICES[user]:
+        return asset_id
+    while asset_id in CHOICES[user]:
+        [asset_id] = random.sample(ASSETS.keys(), 1)
+    return asset_id
 
 
-@app.route('/culture', methods=['GET'])
-def culture():
+@APP.route('/culture', methods=['GET'])
+def route_culture():
+    """Get a culture."""
     user = request.args.get('user')
     if user is None:
         return send_json({"msg": "must log in"}, 401)
     if random.randint(0, 1) == 0:
-        assetId = get_random_culture(user)
+        asset_id = get_random_culture(user)
     else:
-        assetId = get_swiped_culture(user)
-        if assetId is None:
-            assetId = get_random_culture(user)
-    asset = assets[assetId]
+        asset_id = get_swiped_culture(user)
+        if asset_id is None:
+            asset_id = get_random_culture(user)
+    asset = ASSETS[asset_id]
     data = {}
-    data['assetId'] = assetId
+    data['asset_id'] = asset_id
     data['title'] = asset['title']
     data['thumb'] = ("http://samlinger.natmus.dk/"
                      f"{asset['collection']}/asset/"
@@ -80,68 +88,69 @@ def culture():
     return send_json(data, 200)
 
 
-@app.route('/choose', methods=['GET'])
-def choose():
-    global choices
+@APP.route('/choose', methods=['GET'])
+def route_choose():
+    """The user makes a choice on an asset."""
     user = request.args.get('user')
-    assetId = request.args.get('assetId')
+    asset_id = request.args.get('asset_id')
     choice = request.args.get('choice')
-    if any(map(lambda arg: arg is None, [user, assetId, choice])):
+    if any(map(lambda arg: arg is None, [user, asset_id, choice])):
         return send_json({"msg": "parameter missing"}, 401)
-    if user not in choices:
-        choices[user] = {}
-    choices[user][assetId] = choice
-    compute_matches(user, assetId, choice)
+    if asset_id not in ASSETS:
+        return send_json({"msg": "invalid asset_id"}, 401)
+    if user not in CHOICES:
+        CHOICES[user] = {}
+    CHOICES[user][asset_id] = choice
+    update_matches(user, asset_id, choice)
     return send_json({"msg": "choice made"}, 200)
 
 
-def compute_matches(user, assetId, choice):
-    global matches, choices
-    for match in [u for u in choices.keys() if u != user]:
-        if assetId not in choices[match]:
+def update_matches(user, asset_id, choice):
+    """Update the matches, given a choice on an asset by a user."""
+    for match in [u for u in CHOICES.keys() if u != user]:
+        if asset_id not in CHOICES[match]:
             continue
-        matchChoice = choices[match][assetId]
-        if user not in matches:
-            matches[user] = {}
-        if match not in matches[user]:
-            matches[user][match] = {"same": 0, "not": 0}
-        if match not in matches:
-            matches[match] = {}
-        if user not in matches[match]:
-            matches[match][user] = {"same": 0, "not": 0}
-        if choice == matchChoice:
-            matches[user][match]["same"] += 1
-            matches[match][user]["same"] += 1
+        match_choice = CHOICES[match][asset_id]
+        if user not in MATCHES:
+            MATCHES[user] = {}
+        if match not in MATCHES[user]:
+            MATCHES[user][match] = {"same": 0, "not": 0}
+        if match not in MATCHES:
+            MATCHES[match] = {}
+        if user not in MATCHES[match]:
+            MATCHES[match][user] = {"same": 0, "not": 0}
+        if choice == match_choice:
+            MATCHES[user][match]["same"] += 1
+            MATCHES[match][user]["same"] += 1
         else:
-            matches[user][match]["not"] += 1
-            matches[match][user]["not"] += 1
+            MATCHES[user][match]["not"] += 1
+            MATCHES[match][user]["not"] += 1
 
 
-@app.route('/match', methods=['GET'])
-def match():
-    global matches
+@APP.route('/match', methods=['GET'])
+def route_match():
     user = request.args.get('user')
     if user is None:
         return send_json({"msg": f"user missing"}, 401)
-    if user not in matches:
+    if user not in MATCHES:
         return send_json({
             "lost_matches": [],
             "new_matches": [],
             "all_matches": []
         }, 200)
 
-    def sortkey(p):
-        m, s = p
-        return s["same"] - s["not"]
+    def sortkey(key_value):
+        score = key_value[1]
+        return score["same"] - score["not"]
 
-    ls = [(m, s) for (m, s) in matches[user].items()
-          if s['same'] - s['not'] > 3]
-    if user not in check_matches:
-        check_matches[user] = []
-    all_matches = list(map(lambda p: p[0], sorted(ls, key=sortkey)))
-    new_matches = [m for m in all_matches if m not in check_matches[user]]
-    lost_matches = [m for m in check_matches[user] if m not in all_matches]
-    check_matches[user] = all_matches
+    valids = [(match, score) for (match, score) in MATCHES[user].items()
+              if score['same'] - score['not'] > 3]
+    if user not in CHECK_MATCHES:
+        CHECK_MATCHES[user] = []
+    all_matches = list(map(lambda p: p[0], sorted(valids, key=sortkey)))
+    new_matches = [m for m in all_matches if m not in CHECK_MATCHES[user]]
+    lost_matches = [m for m in CHECK_MATCHES[user] if m not in all_matches]
+    CHECK_MATCHES[user] = all_matches
     return send_json({
         "lost_matches": lost_matches,
         "new_matches": new_matches,
@@ -149,8 +158,38 @@ def match():
     }, 200)
 
 
-@app.route('/suggest', methods=['GET'])
-def suggest():
+@APP.route('/matchInfo', methods=['GET'])
+def route_match_info():
+    """Get detailed information about the match between a user and the matched user."""
+    user = request.args.get('user')
+    match = request.args.get('match')
+    if user is None or match is None:
+        return send_json({"msg": "must have user and match"}, 401)
+    if user not in MATCHES or match not in MATCHES[user]:
+        return send_json({
+            "msg": f"no match between '{user}' and '{match}'"
+        }, 401)
+    info = {'same': {}, 'not': {}}
+    for asset_id in CHOICES[user]:
+        if asset_id not in CHOICES[match]:
+            continue
+        user_choice = CHOICES[user][asset_id]
+        match_choice = CHOICES[match][asset_id]
+        if user_choice == match_choice:
+            if user_choice not in info['same']:
+                info['same'][user_choice] = []
+            info['same'][user_choice].append(asset_id)
+        else:
+            info['not'][asset_id] = {
+                'user': user_choice,
+                'match': match_choice
+            }
+    return send_json(info, 200)
+
+
+@APP.route('/suggest', methods=['GET'])
+def route_suggest():
+    """Get a suggestion based on a match."""
     user = request.args.get('user')
     match = request.args.get('match')
     if user is None or match is None:
@@ -158,42 +197,53 @@ def suggest():
     return send_json({"msg": "not yet implemented"}, 500)
 
 
-@app.route('/debug', methods=['GET'])
-def debug():
-    global choices, matches
-    return send_json({'choices': choices, 'matches': matches}, 200)
+@APP.route('/debug', methods=['GET'])
+def route_debug():
+    """Get server state for debugging."""
+    return send_json({'CHOICES': CHOICES, 'MATCHES': MATCHES}, 200)
 
 
-@app.route('/clear', methods=['GET'])
-def clear():
-    global choices, matches
-    matches = {}
-    choices = {}
+@APP.route('/clear', methods=['GET'])
+def route_clear():
+    """Clear server state."""
+    global CHOICES, MATCHES
+    MATCHES = {}
+    CHOICES = {}
     return send_json({"msg": "Cleared"}, 200)
 
 
-@app.route('/load', methods=['GET'])
-def load():
-    global choices, matches
+@APP.route('/load', methods=['GET'])
+def route_load():
+    """Route for loading a dump file."""
+    global CHOICES, MATCHES
     try:
         fname = request.args.get('fname') or 'dump.json'
-        with open(fname, "r", encoding="utf-8") as f:
-            dump = json.load(f)
-            choices = dump['choices']
-            matches = dump['matches']
+        with open(fname, "r", encoding="utf-8") as file:
+            dump = json.load(file)
+            CHOICES = dump['CHOICES']
+            MATCHES = dump['MATCHES']
             return send_json({"msg": f"loaded {fname}"}, 200)
-    except:
+    except IOError:
         return send_json({"msg": f"could not load {fname}"}, 404)
 
 
-@app.route('/save', methods=['GET'])
-def save():
-    global choices, matches
+@APP.route('/save', methods=['GET'])
+def route_save():
+    """Route for saving state to a dump file."""
     fname = request.args.get('fname') or 'dump.json'
-    with open(fname, 'w', encoding="utf-8") as f:
-        json.dump({'choices': choices, 'matches': matches}, f)
+    with open(fname, 'w', encoding="utf-8") as file:
+        json.dump({'CHOICES': CHOICES, 'MATCHES': MATCHES}, file)
     return send_json({"msg:": f"saved to '{fname}'"}, 200)
 
 
+@APP.errorhandler(500)
+def internal_server_error():
+    """Send json on status 500."""
+    return send_json({
+        "msg": f"an internal server error happened. sorry!"
+    }, 500)
+
+
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0')
+    setup()
+    APP.run(debug=True, host='0.0.0.0')
