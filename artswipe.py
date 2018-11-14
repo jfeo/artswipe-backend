@@ -4,12 +4,16 @@ email: jensfeodor@gmail.com
 """
 import random
 import json
+import requests
 
 from flask import Flask, request
 from flask_cors import CORS
 APP = Flask(__name__)
 CORS(APP)
 
+NATMUS_API_SEARCH = "https://api.natmus.dk/search/public/raw"
+
+QUEUE = []
 ASSETS = {}
 CHOICES = {}
 MATCHES = {}
@@ -17,53 +21,121 @@ CHECK_MATCHES = {}
 
 
 def send_json(obj, status_code, headers={}):
-    """Create the response tuple with, automatically dumping the given object to a json string, and
-    setting the Content-Type header appropriately."""
+    """Create the response tuple with, automatically dumping the given object
+    to a json string, and setting the Content-Type header appropriately.
+    """
     headers['Content-Type'] = 'application/json'
     return json.dumps(obj), status_code, headers
-
-
-def setup():
-    """Setup the server"""
-    with open("assets.csv", "r", encoding="utf-8") as file:
-        for line in file:
-            try:
-                (collection, asset, title) = line.split(",")
-                ASSETS[f"natmus-{collection}-{asset}"] = {
-                    "inst": "natmus",
-                    "collection": collection,
-                    "asset": asset,
-                    "title": title
-                }
-            except ValueError:
-                pass
 
 
 def get_swiped_culture(user, k=10):
     """Get a culture item that has been swiped already by another user."""
     if not [u for u in CHOICES.keys() if u != user]:
         return None
+
     [other] = random.sample([u for u in CHOICES.keys() if u != user], 1)
     [asset_id] = random.sample(CHOICES[other].keys(), 1)
     if user not in CHOICES or not CHOICES[user]:
-        return asset_id
+        return ASSETS[asset_id]
     while asset_id in CHOICES[user]:
         [other] = random.sample([u for u in CHOICES.keys() if u != user], 1)
         [asset_id] = random.sample(CHOICES[other].keys(), 1)
         k -= 1
         if k == 0:
             return None
-    return asset_id
+    return ASSETS[asset_id]
+
+
+def get_asset_info(asset_id):
+    """Get asset information"""
+    _id = asset_id[6:]
+    es_data = {
+        "query": {
+            "constant_score": {
+                "filter": {
+                    "bool": {
+                        "must": [{
+                            "term": {
+                                "_id": _id
+                            }
+                        }, {
+                            "term": {
+                                "type": "asset"
+                            }
+                        }]
+                    }
+                }
+            }
+        }
+    }
+    req = requests.post(
+        NATMUS_API_SEARCH,
+        data=json.dumps(es_data),
+        headers={"Content-Type": "application/json"})
+    result = req.json()
+    return result['hits']['hits'][0]['_source']
+
+
+def natmus_transform_result(hit):
+    asset = {}
+    asset['id'] = hit['_source']['id']
+    asset['collection'] = hit['_source']['collection']
+    asset['asset_id'] = f"natmus-{asset['collection']}-{asset['id']}"
+    asset['title'] = hit['_source']['text']['da-DK']['title']
+    asset['thumb'] = (f"https://samlinger.natmus.dk/{asset['collection']}"
+                      f"/asset/{asset['id']}/thumbnail/500")
+    return asset
+
+
+def fill_queue():
+    """Fill the asset queue with randomly sampled assets."""
+    global QUEUE
+    es_data = {
+        "size": 100,
+        "query": {
+            "bool": {
+                "filter": {
+                    "term": {
+                        "type": "asset"
+                    }
+                },
+                "should": {
+                    "function_score": {
+                        "functions": [{
+                            "random_score": {
+                                "seed": random.randint(1, 2 ^ 32 - 1)
+                            }
+                        }],
+                        "score_mode":
+                        "sum"
+                    }
+                }
+            }
+        }
+    }
+    req = requests.post(
+        NATMUS_API_SEARCH,
+        data=json.dumps(es_data),
+        headers={"Content-Type": "application/json"})
+    results = req.json()
+    assets = list(map(natmus_transform_result, results['hits']['hits']))
+    QUEUE.extend(map(lambda asset: asset['asset_id'], assets))
+    tmpdict = {asset['asset_id']: asset for asset in assets}
+    ASSETS.update(tmpdict)
 
 
 def get_random_culture(user):
     """Get a culture item by random sampling."""
-    [asset_id] = random.sample(ASSETS.keys(), 1)
+    if not QUEUE:
+        fill_queue()
+    asset_id = QUEUE.pop()
     if user not in CHOICES or not CHOICES[user]:
-        return asset_id
+        return ASSETS[asset_id]
     while asset_id in CHOICES[user]:
-        [asset_id] = random.sample(ASSETS.keys(), 1)
-    return asset_id
+        if not QUEUE:
+            fill_queue()
+        asset_id = QUEUE.pop()
+    return ASSETS[asset_id]
 
 
 @APP.route('/culture', methods=['GET'])
@@ -72,20 +144,21 @@ def route_culture():
     user = request.args.get('user')
     if user is None:
         return send_json({"msg": "must log in"}, 401)
-    if random.randint(0, 1) == 0:
-        asset_id = get_random_culture(user)
+    count = request.args.get('count')
+    if count is None:
+        count = 1
     else:
-        asset_id = get_swiped_culture(user)
-        if asset_id is None:
-            asset_id = get_random_culture(user)
-    asset = ASSETS[asset_id]
-    data = {}
-    data['asset_id'] = asset_id
-    data['title'] = asset['title']
-    data['thumb'] = ("http://samlinger.natmus.dk/"
-                     f"{asset['collection']}/asset/"
-                     f"{asset['asset']}/thumbnail/500")
-    return send_json(data, 200)
+        count = int(count)
+    assets = []
+    for _ in range(count):
+        if random.randint(0, 1) == 0:
+            asset = get_random_culture(user)
+        else:
+            asset = get_swiped_culture(user)
+            if asset is None:
+                asset = get_random_culture(user)
+        assets.append(asset)
+    return send_json(assets, 200)
 
 
 @APP.route('/choose', methods=['GET'])
@@ -129,6 +202,7 @@ def update_matches(user, asset_id, choice):
 
 @APP.route('/match', methods=['GET'])
 def route_match():
+    """Match route"""
     user = request.args.get('user')
     if user is None:
         return send_json({"msg": f"user missing"}, 401)
@@ -245,5 +319,4 @@ def internal_server_error():
 
 
 if __name__ == '__main__':
-    setup()
     APP.run(debug=True, host='0.0.0.0')
