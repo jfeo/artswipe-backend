@@ -82,7 +82,7 @@ def natmus_transform_result(hit):
     asset['collection'] = hit['_source']['collection']
     asset['asset_id'] = f"natmus-{asset['collection']}-{asset['id']}"
     asset['title'] = hit['_source']['text']['da-DK']['title']
-    asset['thumb'] = (f"https://samlinger.natmus.dk/{asset['collection']}"
+    asset['thumb'] = (f"http://samlinger.natmus.dk/{asset['collection']}"
                       f"/asset/{asset['id']}/thumbnail/500")
     return asset
 
