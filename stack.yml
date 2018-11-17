@@ -1,0 +1,19 @@
+version: "3"
+services:
+    backend:
+        depends_on:
+            - db
+        build: .
+        ports:
+            - "5000:5000"
+    db:
+        image: mysql
+        ports:
+            - "3306:3306"
+        volumes:
+            - ./mysql:/docker-entrypoint-initdb.d
+        environment:
+            MYSQL_USER: "asadmin"
+            MYSQL_PASSWORD: "asrocks"
+            MYSQL_DATABASE: "artswipe"
+            MYSQL_ROOT_PASSWORD: "rootyroot"

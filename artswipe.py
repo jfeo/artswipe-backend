@@ -3,8 +3,10 @@ author: jfeo
 email: jensfeodor@gmail.com
 """
 import random
+import time
 import json
 import requests
+import pymysql
 
 from flask import Flask, request
 from flask_cors import CORS
@@ -19,6 +21,20 @@ CHOICES = {}
 MATCHES = {}
 CHECK_MATCHES = {}
 
+time.sleep(4)
+connection = pymysql.connect(
+    host='localhost',
+    user='asadmin',
+    password='asrocks',
+    charset='utf8',
+    database="artswipe",
+    autocommit=True)
+
+
+def get_connection():
+    """Get a connection to the MYSQL server."""
+    return connection
+
 
 def send_json(obj, status_code, headers={}):
     """Create the response tuple with, automatically dumping the given object
@@ -30,20 +46,15 @@ def send_json(obj, status_code, headers={}):
 
 def get_swiped_culture(user, k=10):
     """Get a culture item that has been swiped already by another user."""
-    if not [u for u in CHOICES.keys() if u != user]:
-        return None
-
-    [other] = random.sample([u for u in CHOICES.keys() if u != user], 1)
-    [asset_id] = random.sample(CHOICES[other].keys(), 1)
-    if user not in CHOICES or not CHOICES[user]:
-        return ASSETS[asset_id]
-    while asset_id in CHOICES[user]:
-        [other] = random.sample([u for u in CHOICES.keys() if u != user], 1)
-        [asset_id] = random.sample(CHOICES[other].keys(), 1)
-        k -= 1
-        if k == 0:
-            return None
-    return ASSETS[asset_id]
+    asset_id = None
+    with get_connection().cursor() as cur:
+        cur.execute(
+            "SELECT `asset_id` FROM `swipes` GROUP BY `asset_id` "
+            "HAVING SUM(user_uuid = %s) = 0 ORDER BY rand() LIMIT 1", user)
+        result = cur.fetchone()
+        if result:
+            asset_id = result[0]
+    return ASSETS.get(asset_id)
 
 
 def get_asset_info(asset_id):
@@ -171,33 +182,11 @@ def route_choose():
         return send_json({"msg": "parameter missing"}, 401)
     if asset_id not in ASSETS:
         return send_json({"msg": "invalid asset_id"}, 401)
-    if user not in CHOICES:
-        CHOICES[user] = {}
-    CHOICES[user][asset_id] = choice
-    update_matches(user, asset_id, choice)
+    with get_connection().cursor() as cur:
+        ret = cur.execute(
+            "INSERT INTO `swipes` (user_uuid, asset_id, choice)"
+            "VALUES (%s, %s, %s)", (user, asset_id, choice))
     return send_json({"msg": "choice made"}, 200)
-
-
-def update_matches(user, asset_id, choice):
-    """Update the matches, given a choice on an asset by a user."""
-    for match in [u for u in CHOICES.keys() if u != user]:
-        if asset_id not in CHOICES[match]:
-            continue
-        match_choice = CHOICES[match][asset_id]
-        if user not in MATCHES:
-            MATCHES[user] = {}
-        if match not in MATCHES[user]:
-            MATCHES[user][match] = {"same": 0, "not": 0}
-        if match not in MATCHES:
-            MATCHES[match] = {}
-        if user not in MATCHES[match]:
-            MATCHES[match][user] = {"same": 0, "not": 0}
-        if choice == match_choice:
-            MATCHES[user][match]["same"] += 1
-            MATCHES[match][user]["same"] += 1
-        else:
-            MATCHES[user][match]["not"] += 1
-            MATCHES[match][user]["not"] += 1
 
 
 @APP.route('/match', methods=['GET'])
@@ -206,30 +195,18 @@ def route_match():
     user = request.args.get('user')
     if user is None:
         return send_json({"msg": f"user missing"}, 401)
-    if user not in MATCHES:
-        return send_json({
-            "lost_matches": [],
-            "new_matches": [],
-            "all_matches": []
-        }, 200)
-
-    def sortkey(key_value):
-        score = key_value[1]
-        return score["same"] - score["not"]
-
-    valids = [(match, score) for (match, score) in MATCHES[user].items()
-              if score['same'] - score['not'] > 3]
-    if user not in CHECK_MATCHES:
-        CHECK_MATCHES[user] = []
-    all_matches = list(map(lambda p: p[0], sorted(valids, key=sortkey)))
-    new_matches = [m for m in all_matches if m not in CHECK_MATCHES[user]]
-    lost_matches = [m for m in CHECK_MATCHES[user] if m not in all_matches]
-    CHECK_MATCHES[user] = all_matches
-    return send_json({
-        "lost_matches": lost_matches,
-        "new_matches": new_matches,
-        "all_matches": all_matches
-    }, 200)
+    with get_connection().cursor() as cur:
+        cur.execute(
+            "SELECT s2.user_uuid FROM swipes s1 "
+            "JOIN swipes s2 ON s1.asset_id = s2.asset_id "
+            "WHERE s1.user_uuid = %s AND s2.user_uuid != %s "
+            "GROUP BY s2.user_uuid "
+            "HAVING SUM(s1.choice = s2.choice) - "
+            "SUM(s1.choice != s2.choice) > 2 "
+            "ORDER BY SUM(s1.choice = s2.choice) - "
+            "SUM(s1.choice != s2.choice)", (user, user))
+        matches = list(map(lambda val: val[0], cur.fetchall()))
+        return send_json(matches, 200)
 
 
 @APP.route('/matchInfo', methods=['GET'])
