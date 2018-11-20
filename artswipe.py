@@ -12,35 +12,87 @@ from flask_cors import CORS
 APP = Flask(__name__)
 CORS(APP)
 
-class NatmusAPI(object):
+
+class NatmusAPI():
+    """Wrapper for the API of the National Museum."""
 
     def __init__(self):
+        self.prefix = "natmus"
         self.url = "https://api.natmus.dk/search/public/raw"
 
+    def map_asset(self, hit):
+        """Transform search result"""
+        asset = {}
+        asset['id'] = hit['_source']['id']
+        asset['collection'] = hit['_source']['collection']
+        asset['asset_id'] = f"{self.prefix}-{asset['collection']}-{asset['id']}"
+        asset['title'] = hit['_source']['text']['da-DK']['title']
+        asset['thumb'] = (f"http://samlinger.natmus.dk/{asset['collection']}"
+                          f"/asset/{asset['id']}/thumbnail/500")
+        return asset
 
-connection = pymysql.connect(
-    host='localhost',
-    user='asadmin',
-    password='asrocks',
-    charset='utf8',
-    database="artswipe",
-    autocommit=True)
+    def fetch_assets(self):
+        """Fetch assets from API."""
+        es_data = {
+            "size": 100,
+            "query": {
+                "bool": {
+                    "filter": {
+                        "term": {
+                            "type": "asset"
+                        }
+                    },
+                    "should": {
+                        "function_score": {
+                            "functions": [{
+                                "random_score": {
+                                    "seed": random.randint(1, 2**32 - 1)
+                                }
+                            }],
+                            "score_mode":
+                            "sum"
+                        }
+                    }
+                }
+            }
+        }
+        req = requests.post(
+            self.url,
+            data=json.dumps(es_data),
+            headers={"Content-Type": "application/json"})
+        results = req.json()
+        assets = list(map(self.map_asset, results['hits']['hits']))
+        with get_connection().cursor() as cur:
+            cur.executemany(
+                "INSERT IGNORE INTO assets (id, title, thumb) "
+                "VALUES (%(asset_id)s, %(title)s, %(thumb)s)", assets)
 
 
 def get_connection():
-    connection.ping(reconnect=True)
-    return connection
+    """Get a connection to the database."""
+    if not CONNECTION:
+        CONNECTION = pymysql.connect(
+            host='db',
+            user='asadmin',
+            password='asrocks',
+            charset='utf8',
+            database="artswipe",
+            autocommit=True)
+    CONNECTION.ping(reconnect=True)
+    return CONNECTION
 
 
-def send_json(obj, status_code, headers={}):
+def send_json(obj, status_code, headers=None):
     """Create the response tuple with, automatically dumping the given object
     to a json string, and setting the Content-Type header appropriately.
     """
+    if headers is None:
+        headers = {}
     headers['Content-Type'] = 'application/json'
     return json.dumps(obj), status_code, headers
 
 
-def get_swiped_culture(user, k=10):
+def get_swiped_culture(user):
     """Get a culture item that has been swiped already by another user."""
     with get_connection().cursor() as cur:
         cur.execute(
@@ -55,90 +107,11 @@ def get_swiped_culture(user, k=10):
                 "title": result[1],
                 "thumb": result[2]
             }
-        else:
-            return None
-
-
-def get_asset_info(asset_id):
-    """Get asset information"""
-    _id = asset_id[6:]
-    es_data = {
-        "query": {
-            "constant_score": {
-                "filter": {
-                    "bool": {
-                        "must": [{
-                            "term": {
-                                "_id": _id
-                            }
-                        }, {
-                            "term": {
-                                "type": "asset"
-                            }
-                        }]
-                    }
-                }
-            }
-        }
-    }
-    req = requests.post(
-        NATMUS_API_SEARCH,
-        data=json.dumps(es_data),
-        headers={"Content-Type": "application/json"})
-    result = req.json()
-    return result['hits']['hits'][0]['_source']
-
-
-def natmus_transform_result(hit):
-    """Transform search result"""
-    asset = {}
-    asset['id'] = hit['_source']['id']
-    asset['collection'] = hit['_source']['collection']
-    asset['asset_id'] = f"natmus-{asset['collection']}-{asset['id']}"
-    asset['title'] = hit['_source']['text']['da-DK']['title']
-    asset['thumb'] = (f"http://samlinger.natmus.dk/{asset['collection']}"
-                      f"/asset/{asset['id']}/thumbnail/500")
-    return asset
-
-
-def fetch_assets():
-    """Fill the asset queue with randomly sampled assets."""
-    es_data = {
-        "size": 100,
-        "query": {
-            "bool": {
-                "filter": {
-                    "term": {
-                        "type": "asset"
-                    }
-                },
-                "should": {
-                    "function_score": {
-                        "functions": [{
-                            "random_score": {
-                                "seed": random.randint(1, 2 ^ 32 - 1)
-                            }
-                        }],
-                        "score_mode":
-                        "sum"
-                    }
-                }
-            }
-        }
-    }
-    req = requests.post(
-        NATMUS_API_SEARCH,
-        data=json.dumps(es_data),
-        headers={"Content-Type": "application/json"})
-    results = req.json()
-    assets = list(map(natmus_transform_result, results['hits']['hits']))
-    with get_connection().cursor() as cur:
-        cur.executemany(
-            "INSERT IGNORE INTO assets (id, title, thumb) "
-            "VALUES (%(asset_id)s, %(title)s, %(thumb)s)", assets)
+        return None
 
 
 def user_has_asset(user, asset_id):
+    """Check if the given user has the given asset."""
     with get_connection().cursor() as cur:
         cur.execute(
             "SELECT COUNT(*) FROM swipes "
@@ -148,14 +121,14 @@ def user_has_asset(user, asset_id):
 
 
 def get_asset(asset_id):
+    """Get the asset."""
     with get_connection().cursor() as cur:
-        print(asset_id, flush=True)
         cur.execute("SELECT * FROM assets WHERE id = %s LIMIT 1", (asset_id))
         asset = cur.fetchone()
         return {"asset_id": asset[0], "title": asset[1], "thumb": asset[2]}
 
 
-def get_random_culture(user):
+def get_random_culture():
     """Get a culture item by random sampling."""
     with get_connection().cursor() as cur:
         result = None
@@ -165,7 +138,8 @@ def get_random_culture(user):
                         "WHERE s.asset_id IS NULL ORDER BY rand() LIMIT 1")
             result = cur.fetchone()
             if result is None:
-                fetch_assets()
+                [api] = random.sample(APIS, 1)
+                api.fetch_assets()
             else:
                 return {
                     "asset_id": result[0],
@@ -188,11 +162,11 @@ def route_culture():
     assets = []
     for _ in range(count):
         if random.randint(0, 1) == 0:
-            asset = get_random_culture(user)
+            asset = get_random_culture()
         else:
             asset = get_swiped_culture(user)
             if asset is None:
-                asset = get_random_culture(user)
+                asset = get_random_culture()
         assets.append(asset)
     return send_json(assets, 200)
 
@@ -210,7 +184,7 @@ def route_choose():
     except ValueError:
         return send_json({"msg": "invalid asset_id"}, 401)
     with get_connection().cursor() as cur:
-        ret = cur.execute(
+        cur.execute(
             "INSERT INTO `swipes` (user_uuid, asset_id, choice)"
             "VALUES (%s, %s, %s)", (user, asset_id, choice))
     return send_json({"msg": "choice made"}, 200)
@@ -255,4 +229,6 @@ def internal_server_error():
 
 
 if __name__ == '__main__':
+    CONNECTION = None
+    APIS = [NatmusAPI()]
     APP.run(debug=True, host='0.0.0.0')
