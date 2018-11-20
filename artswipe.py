@@ -3,7 +3,6 @@ author: jfeo
 email: jensfeodor@gmail.com
 """
 import random
-import time
 import json
 import requests
 import pymysql
@@ -15,24 +14,22 @@ CORS(APP)
 
 NATMUS_API_SEARCH = "https://api.natmus.dk/search/public/raw"
 
-QUEUE = []
-ASSETS = {}
-CHOICES = {}
-MATCHES = {}
-CHECK_MATCHES = {}
-
-time.sleep(4)
-connection = pymysql.connect(
-    host='localhost',
-    user='asadmin',
-    password='asrocks',
-    charset='utf8',
-    database="artswipe",
-    autocommit=True)
+connection = None
+while connection is None:
+    try:
+        connection = pymysql.connect(
+            host='db',
+            user='asadmin',
+            password='asrocks',
+            charset='utf8',
+            database="artswipe",
+            autocommit=True)
+    except pymysql.err.OperationalError:
+        pass
 
 
 def get_connection():
-    """Get a connection to the MYSQL server."""
+    connection.ping(reconnect=True)
     return connection
 
 
@@ -46,15 +43,21 @@ def send_json(obj, status_code, headers={}):
 
 def get_swiped_culture(user, k=10):
     """Get a culture item that has been swiped already by another user."""
-    asset_id = None
     with get_connection().cursor() as cur:
         cur.execute(
-            "SELECT `asset_id` FROM `swipes` GROUP BY `asset_id` "
-            "HAVING SUM(user_uuid = %s) = 0 ORDER BY rand() LIMIT 1", user)
+            "SELECT a.* FROM `swipes` s "
+            "LEFT JOIN assets a ON s.asset_id = a.id "
+            "GROUP BY s.`asset_id` HAVING SUM(s.user_uuid = %s) = 0 "
+            "ORDER BY rand() LIMIT 1", user)
         result = cur.fetchone()
-        if result:
-            asset_id = result[0]
-    return ASSETS.get(asset_id)
+        if result is not None:
+            return {
+                "asset_id": result[0],
+                "title": result[1],
+                "thumb": result[2]
+            }
+        else:
+            return None
 
 
 def get_asset_info(asset_id):
@@ -88,6 +91,7 @@ def get_asset_info(asset_id):
 
 
 def natmus_transform_result(hit):
+    """Transform search result"""
     asset = {}
     asset['id'] = hit['_source']['id']
     asset['collection'] = hit['_source']['collection']
@@ -98,9 +102,8 @@ def natmus_transform_result(hit):
     return asset
 
 
-def fill_queue():
+def fetch_assets():
     """Fill the asset queue with randomly sampled assets."""
-    global QUEUE
     es_data = {
         "size": 100,
         "query": {
@@ -130,23 +133,46 @@ def fill_queue():
         headers={"Content-Type": "application/json"})
     results = req.json()
     assets = list(map(natmus_transform_result, results['hits']['hits']))
-    QUEUE.extend(map(lambda asset: asset['asset_id'], assets))
-    tmpdict = {asset['asset_id']: asset for asset in assets}
-    ASSETS.update(tmpdict)
+    with get_connection().cursor() as cur:
+        cur.executemany(
+            "INSERT IGNORE INTO assets (id, title, thumb) "
+            "VALUES (%(asset_id)s, %(title)s, %(thumb)s)", assets)
+
+
+def user_has_asset(user, asset_id):
+    with get_connection().cursor() as cur:
+        cur.execute(
+            "SELECT COUNT(*) FROM swipes "
+            "WHERE user_uuid = %s AND asset_id = %s LIMIT 1", (user, asset_id))
+        [count] = cur.fetchone()
+        return count > 0
+
+
+def get_asset(asset_id):
+    with get_connection().cursor() as cur:
+        print(asset_id, flush=True)
+        cur.execute("SELECT * FROM assets WHERE id = %s LIMIT 1", (asset_id))
+        asset = cur.fetchone()
+        return {"asset_id": asset[0], "title": asset[1], "thumb": asset[2]}
 
 
 def get_random_culture(user):
     """Get a culture item by random sampling."""
-    if not QUEUE:
-        fill_queue()
-    asset_id = QUEUE.pop()
-    if user not in CHOICES or not CHOICES[user]:
-        return ASSETS[asset_id]
-    while asset_id in CHOICES[user]:
-        if not QUEUE:
-            fill_queue()
-        asset_id = QUEUE.pop()
-    return ASSETS[asset_id]
+    with get_connection().cursor() as cur:
+        result = None
+        while result is None:
+            cur.execute("SELECT a.* FROM assets a "
+                        "LEFT JOIN swipes s ON a.id = s.asset_id "
+                        "WHERE s.asset_id IS NULL ORDER BY rand() LIMIT 1")
+            result = cur.fetchone()
+            if result is None:
+                fetch_assets()
+            else:
+                return {
+                    "asset_id": result[0],
+                    "title": result[1],
+                    "thumb": result[2]
+                }
 
 
 @APP.route('/culture', methods=['GET'])
@@ -180,7 +206,9 @@ def route_choose():
     choice = request.args.get('choice')
     if any(map(lambda arg: arg is None, [user, asset_id, choice])):
         return send_json({"msg": "parameter missing"}, 401)
-    if asset_id not in ASSETS:
+    try:
+        get_asset(asset_id)
+    except ValueError:
         return send_json({"msg": "invalid asset_id"}, 401)
     with get_connection().cursor() as cur:
         ret = cur.execute(
@@ -209,35 +237,6 @@ def route_match():
         return send_json(matches, 200)
 
 
-@APP.route('/matchInfo', methods=['GET'])
-def route_match_info():
-    """Get detailed information about the match between a user and the matched user."""
-    user = request.args.get('user')
-    match = request.args.get('match')
-    if user is None or match is None:
-        return send_json({"msg": "must have user and match"}, 401)
-    if user not in MATCHES or match not in MATCHES[user]:
-        return send_json({
-            "msg": f"no match between '{user}' and '{match}'"
-        }, 401)
-    info = {'same': {}, 'not': {}}
-    for asset_id in CHOICES[user]:
-        if asset_id not in CHOICES[match]:
-            continue
-        user_choice = CHOICES[user][asset_id]
-        match_choice = CHOICES[match][asset_id]
-        if user_choice == match_choice:
-            if user_choice not in info['same']:
-                info['same'][user_choice] = []
-            info['same'][user_choice].append(asset_id)
-        else:
-            info['not'][asset_id] = {
-                'user': user_choice,
-                'match': match_choice
-            }
-    return send_json(info, 200)
-
-
 @APP.route('/suggest', methods=['GET'])
 def route_suggest():
     """Get a suggestion based on a match."""
@@ -246,45 +245,6 @@ def route_suggest():
     if user is None or match is None:
         return send_json({"msg": "must have user and match"}, 401)
     return send_json({"msg": "not yet implemented"}, 500)
-
-
-@APP.route('/debug', methods=['GET'])
-def route_debug():
-    """Get server state for debugging."""
-    return send_json({'CHOICES': CHOICES, 'MATCHES': MATCHES}, 200)
-
-
-@APP.route('/clear', methods=['GET'])
-def route_clear():
-    """Clear server state."""
-    global CHOICES, MATCHES
-    MATCHES = {}
-    CHOICES = {}
-    return send_json({"msg": "Cleared"}, 200)
-
-
-@APP.route('/load', methods=['GET'])
-def route_load():
-    """Route for loading a dump file."""
-    global CHOICES, MATCHES
-    try:
-        fname = request.args.get('fname') or 'dump.json'
-        with open(fname, "r", encoding="utf-8") as file:
-            dump = json.load(file)
-            CHOICES = dump['CHOICES']
-            MATCHES = dump['MATCHES']
-            return send_json({"msg": f"loaded {fname}"}, 200)
-    except IOError:
-        return send_json({"msg": f"could not load {fname}"}, 404)
-
-
-@APP.route('/save', methods=['GET'])
-def route_save():
-    """Route for saving state to a dump file."""
-    fname = request.args.get('fname') or 'dump.json'
-    with open(fname, 'w', encoding="utf-8") as file:
-        json.dump({'CHOICES': CHOICES, 'MATCHES': MATCHES}, file)
-    return send_json({"msg:": f"saved to '{fname}'"}, 200)
 
 
 @APP.errorhandler(500)
