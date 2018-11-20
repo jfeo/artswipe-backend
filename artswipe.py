@@ -12,20 +12,19 @@ from flask_cors import CORS
 APP = Flask(__name__)
 CORS(APP)
 
-NATMUS_API_SEARCH = "https://api.natmus.dk/search/public/raw"
+class NatmusAPI(object):
 
-connection = None
-while connection is None:
-    try:
-        connection = pymysql.connect(
-            host='db',
-            user='asadmin',
-            password='asrocks',
-            charset='utf8',
-            database="artswipe",
-            autocommit=True)
-    except pymysql.err.OperationalError:
-        pass
+    def __init__(self):
+        self.url = "https://api.natmus.dk/search/public/raw"
+
+
+connection = pymysql.connect(
+    host='localhost',
+    user='asadmin',
+    password='asrocks',
+    charset='utf8',
+    database="artswipe",
+    autocommit=True)
 
 
 def get_connection():
