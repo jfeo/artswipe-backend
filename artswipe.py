@@ -32,7 +32,7 @@ connection = pymysql.connect(
 
 
 def get_connection():
-    """Get a connection to the MYSQL server."""
+    connection.ping(reconnect=True)
     return connection
 
 
