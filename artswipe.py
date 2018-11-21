@@ -12,6 +12,8 @@ from flask_cors import CORS
 APP = Flask(__name__)
 CORS(APP)
 
+CONNECTION = None
+
 
 class NatmusAPI():
     """Wrapper for the API of the National Museum."""
@@ -19,22 +21,33 @@ class NatmusAPI():
     def __init__(self):
         self.prefix = "natmus"
         self.url = "https://api.natmus.dk/search/public/raw"
+        self.image_url = "http://cumulus.natmus.dk/CIP/preview/thumbnail/"
 
     def map_asset(self, hit):
         """Transform search result"""
         asset = {}
         asset['id'] = hit['_source']['id']
         asset['collection'] = hit['_source']['collection']
-        asset['asset_id'] = f"{self.prefix}-{asset['collection']}-{asset['id']}"
+        asset[
+            'asset_id'] = f"{self.prefix}-{asset['collection']}-{asset['id']}"
         asset['title'] = hit['_source']['text']['da-DK']['title']
-        asset['thumb'] = (f"http://samlinger.natmus.dk/{asset['collection']}"
-                          f"/asset/{asset['id']}/thumbnail/500")
         return asset
+
+    def fetch_image(self, asset_id):
+        """Fetch an image and update db."""
+        collection = asset_id.split("-")[1]
+        id = asset_id.split("-")[2]
+        r = requests.get(f"{self.image_url}{collection}/{id}")
+        if r.status_code == 200:
+            image = r.content
+            with get_connection().cursor() as cur:
+                cur.execute("UPDATE assets SET image = %s WHERE id = %s",
+                            (image, asset_id))
 
     def fetch_assets(self):
         """Fetch assets from API."""
         es_data = {
-            "size": 100,
+            "size": 10,
             "query": {
                 "bool": {
                     "filter": {
@@ -64,12 +77,16 @@ class NatmusAPI():
         assets = list(map(self.map_asset, results['hits']['hits']))
         with get_connection().cursor() as cur:
             cur.executemany(
-                "INSERT IGNORE INTO assets (id, title, thumb) "
-                "VALUES (%(asset_id)s, %(title)s, %(thumb)s)", assets)
+                "INSERT IGNORE INTO assets (id, title) "
+                "VALUES (%(asset_id)s, %(title)s)", assets)
+
+
+APIS = { "natmus": NatmusAPI() }
 
 
 def get_connection():
     """Get a connection to the database."""
+    global CONNECTION
     if not CONNECTION:
         CONNECTION = pymysql.connect(
             host='db',
@@ -104,8 +121,7 @@ def get_swiped_culture(user):
         if result is not None:
             return {
                 "asset_id": result[0],
-                "title": result[1],
-                "thumb": result[2]
+                "title": result[1]
             }
         return None
 
@@ -125,7 +141,7 @@ def get_asset(asset_id):
     with get_connection().cursor() as cur:
         cur.execute("SELECT * FROM assets WHERE id = %s LIMIT 1", (asset_id))
         asset = cur.fetchone()
-        return {"asset_id": asset[0], "title": asset[1], "thumb": asset[2]}
+        return {"asset_id": asset[0], "title": asset[1]}
 
 
 def get_random_culture():
@@ -138,13 +154,12 @@ def get_random_culture():
                         "WHERE s.asset_id IS NULL ORDER BY rand() LIMIT 1")
             result = cur.fetchone()
             if result is None:
-                [api] = random.sample(APIS, 1)
+                [api] = random.sample(APIS.values(), 1)
                 api.fetch_assets()
             else:
                 return {
                     "asset_id": result[0],
-                    "title": result[1],
-                    "thumb": result[2]
+                    "title": result[1]
                 }
 
 
@@ -187,6 +202,14 @@ def route_choose():
         cur.execute(
             "INSERT INTO `swipes` (user_uuid, asset_id, choice)"
             "VALUES (%s, %s, %s)", (user, asset_id, choice))
+        if choice == "true":
+            cur.execute(
+                "UPDATE assets SET upvotes = upvotes + 1 "
+                "WHERE id = %s", (asset_id))
+        else:
+            cur.execute(
+                "UPDATE assets SET downvotes = downvotes + 1 "
+                "WHERE id = %s", (asset_id))
     return send_json({"msg": "choice made"}, 200)
 
 
@@ -210,6 +233,26 @@ def route_match():
         return send_json(matches, 200)
 
 
+@APP.route('/image', methods=['GET'])
+def route_image():
+    asset_id = request.args.get('asset_id')
+    if asset_id is None:
+        return send_json({"msg": "missing asset_id"})
+    with get_connection().cursor() as cur:
+        cur.execute(
+            "SELECT image FROM assets "
+            "WHERE id = %s AND image IS NOT NULL LIMIT 1", (asset_id))
+        result = cur.fetchone()
+        if result is None:
+            APIS[(asset_id).split("-")[0]].fetch_image(asset_id)
+            cur.execute(
+                "SELECT image FROM assets "
+                "WHERE id = %s AND image is NOT NULL LIMIT 1", (asset_id))
+            result = cur.fetchone()
+        image = result[0]
+        return image, 200, {"Content-Type": "image/jpeg"}
+
+
 @APP.route('/suggest', methods=['GET'])
 def route_suggest():
     """Get a suggestion based on a match."""
@@ -229,6 +272,4 @@ def internal_server_error():
 
 
 if __name__ == '__main__':
-    CONNECTION = None
-    APIS = [NatmusAPI()]
     APP.run(debug=True, host='0.0.0.0')

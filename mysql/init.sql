@@ -8,8 +8,8 @@ CREATE TABLE swipes (
 CREATE TABLE assets (
 	id CHAR(64),
 	title TEXT,
-	thumb CHAR(128),
-	upvotes INT,
-	downvotes INT,
+	image LONGBLOB,
+	upvotes INT DEFAULT 0,
+	downvotes INT DEFAULT 0,
 	PRIMARY KEY (id)
 );
