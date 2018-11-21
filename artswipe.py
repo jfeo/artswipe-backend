@@ -81,7 +81,7 @@ class NatmusAPI():
                 "VALUES (%(asset_id)s, %(title)s)", assets)
 
 
-APIS = { "natmus": NatmusAPI() }
+APIS = {"natmus": NatmusAPI()}
 
 
 def get_connection():
@@ -119,10 +119,7 @@ def get_swiped_culture(user):
             "ORDER BY rand() LIMIT 1", user)
         result = cur.fetchone()
         if result is not None:
-            return {
-                "asset_id": result[0],
-                "title": result[1]
-            }
+            return {"asset_id": result[0], "title": result[1]}
         return None
 
 
@@ -154,13 +151,10 @@ def get_random_culture():
                         "WHERE s.asset_id IS NULL ORDER BY rand() LIMIT 1")
             result = cur.fetchone()
             if result is None:
-                [api] = random.sample(APIS.values(), 1)
+                [api] = random.sample(list(APIS.values()), 1)
                 api.fetch_assets()
             else:
-                return {
-                    "asset_id": result[0],
-                    "title": result[1]
-                }
+                return {"asset_id": result[0], "title": result[1]}
 
 
 @APP.route('/culture', methods=['GET'])
