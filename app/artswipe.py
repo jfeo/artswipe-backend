@@ -114,9 +114,9 @@ def get_swiped_culture(user):
     """Get a culture item that has been swiped already by another user."""
     with get_connection().cursor() as cur:
         cur.execute(
-            "SELECT a.* FROM `swipes` s "
-            "LEFT JOIN assets a ON s.asset_id = a.id "
-            "GROUP BY s.`asset_id` HAVING SUM(s.user_uuid = %s) = 0 "
+            "SELECT a.id, a.title FROM `assets` a "
+            "RIGHT JOIN `swipes` s ON s.asset_id = a.id "
+            "GROUP BY a.`id`, a.title HAVING SUM(s.user_uuid = %s) = 0 "
             "ORDER BY rand() LIMIT 1", user)
         result = cur.fetchone()
         if result is not None:
@@ -264,10 +264,3 @@ def internal_server_error():
     return send_json({
         "msg": f"an internal server error happened. sorry!"
     }, 500)
-
-
-if __name__ == '__main__':
-    if os.environ.get('ARTSWIPE_DEBUG') == "true":
-        APP.run(debug=True, host='0.0.0.0')
-    else:
-        APP.run(host='0.0.0.0')
