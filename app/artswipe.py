@@ -267,7 +267,7 @@ def internal_server_error():
 
 
 if __name__ == '__main__':
-    if os.environ['ARTSWIPE_DEBUG']:
+    if os.environ.get('ARTSWIPE_DEBUG') == "true":
         APP.run(debug=True, host='0.0.0.0')
     else:
         APP.run(host='0.0.0.0')

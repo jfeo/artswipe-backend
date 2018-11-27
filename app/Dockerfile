@@ -2,9 +2,9 @@ FROM debian:buster
 MAINTAINER jfeo "jensfeodor@gmail.dk"
 RUN apt-get update -y
 RUN apt-get install -y python3-pip python3-dev build-essential
-COPY app/requirements.txt /app/requirements.txt
+COPY requirements.txt /app/requirements.txt
 WORKDIR /app
 RUN pip3 install -r requirements.txt
-COPY app/ /app/
+COPY artswipe.py /app/artswipe.py
 EXPOSE 5000
-ENTRYPOINT ["uwsgi", "--ini", "/app/uwsgi.ini"]
+ENTRYPOINT ["uwsgi", "--socket", "0.0.0.0:5000", "--protocol=http", "-w", "artswipe", "--callable", "APP"]
