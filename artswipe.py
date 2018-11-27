@@ -2,6 +2,7 @@
 author: jfeo
 email: jensfeodor@gmail.com
 """
+import os
 import random
 import json
 import requests
@@ -266,4 +267,7 @@ def internal_server_error():
 
 
 if __name__ == '__main__':
-    APP.run(debug=True, host='0.0.0.0')
+    if os.environ['ARTSWIPE_DEBUG']:
+        APP.run(debug=True, host='0.0.0.0')
+    else:
+        APP.run(host='0.0.0.0')

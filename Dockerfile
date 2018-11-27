@@ -7,4 +7,4 @@ WORKDIR /app
 RUN pip3 install -r requirements.txt
 COPY artswipe.py /app/artswipe.py
 EXPOSE 5000
-ENTRYPOINT ["python3", "artswipe.py"]
+ENTRYPOINT ["uwsgi", "--socket", "0.0.0.0:5000", "--protocol=http", "-w", "artswipe.py"]
