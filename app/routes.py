@@ -2,87 +2,17 @@
 author: jfeo
 email: jensfeodor@gmail.com
 """
-import os
 import random
-import json
-import requests
 import pymysql
 
-from flask import Flask, request
-from flask_cors import CORS
-APP = Flask(__name__)
-CORS(APP)
+from flask import jsonify, request
+
+from app import APP
+from app import api
 
 CONNECTION = None
 
-
-class NatmusAPI():
-    """Wrapper for the API of the National Museum."""
-
-    def __init__(self):
-        self.prefix = "natmus"
-        self.url = "https://api.natmus.dk/search/public/raw"
-        self.image_url = "http://cumulus.natmus.dk/CIP/preview/thumbnail/"
-
-    def map_asset(self, hit):
-        """Transform search result"""
-        asset = {}
-        asset['id'] = hit['_source']['id']
-        asset['collection'] = hit['_source']['collection']
-        asset[
-            'asset_id'] = f"{self.prefix}-{asset['collection']}-{asset['id']}"
-        asset['title'] = hit['_source']['text']['da-DK']['title']
-        return asset
-
-    def fetch_image(self, asset_id):
-        """Fetch an image and update db."""
-        collection = asset_id.split("-")[1]
-        id = asset_id.split("-")[2]
-        r = requests.get(f"{self.image_url}{collection}/{id}")
-        if r.status_code == 200:
-            image = r.content
-            with get_connection().cursor() as cur:
-                cur.execute("UPDATE assets SET image = %s WHERE id = %s",
-                            (image, asset_id))
-
-    def fetch_assets(self):
-        """Fetch assets from API."""
-        es_data = {
-            "size": 10,
-            "query": {
-                "bool": {
-                    "filter": {
-                        "term": {
-                            "type": "asset"
-                        }
-                    },
-                    "should": {
-                        "function_score": {
-                            "functions": [{
-                                "random_score": {
-                                    "seed": random.randint(1, 2**32 - 1)
-                                }
-                            }],
-                            "score_mode":
-                            "sum"
-                        }
-                    }
-                }
-            }
-        }
-        req = requests.post(
-            self.url,
-            data=json.dumps(es_data),
-            headers={"Content-Type": "application/json"})
-        results = req.json()
-        assets = list(map(self.map_asset, results['hits']['hits']))
-        with get_connection().cursor() as cur:
-            cur.executemany(
-                "INSERT IGNORE INTO assets (id, title) "
-                "VALUES (%(asset_id)s, %(title)s)", assets)
-
-
-APIS = {"natmus": NatmusAPI()}
+APIS = {"natmus": api.Natmus()}
 
 
 def get_connection():
@@ -98,16 +28,6 @@ def get_connection():
             autocommit=True)
     CONNECTION.ping(reconnect=True)
     return CONNECTION
-
-
-def send_json(obj, status_code, headers=None):
-    """Create the response tuple with, automatically dumping the given object
-    to a json string, and setting the Content-Type header appropriately.
-    """
-    if headers is None:
-        headers = {}
-    headers['Content-Type'] = 'application/json'
-    return json.dumps(obj), status_code, headers
 
 
 def get_swiped_culture(user):
@@ -163,7 +83,7 @@ def route_culture():
     """Get a culture."""
     user = request.args.get('user')
     if user is None:
-        return send_json({"msg": "must log in"}, 401)
+        return jsonify({"msg": "must log in"}), 401
     count = request.args.get('count')
     if count is None:
         count = 1
@@ -178,7 +98,7 @@ def route_culture():
             if asset is None:
                 asset = get_random_culture()
         assets.append(asset)
-    return send_json(assets, 200)
+    return jsonify(assets), 200
 
 
 @APP.route('/choose', methods=['GET'])
@@ -188,11 +108,11 @@ def route_choose():
     asset_id = request.args.get('asset_id')
     choice = request.args.get('choice')
     if any(map(lambda arg: arg is None, [user, asset_id, choice])):
-        return send_json({"msg": "parameter missing"}, 401)
+        return jsonify({"msg": "parameter missing"}), 401
     try:
         get_asset(asset_id)
     except ValueError:
-        return send_json({"msg": "invalid asset_id"}, 401)
+        return jsonify({"msg": "invalid asset_id"}), 401
     with get_connection().cursor() as cur:
         cur.execute(
             "INSERT INTO `swipes` (user_uuid, asset_id, choice)"
@@ -205,7 +125,7 @@ def route_choose():
             cur.execute(
                 "UPDATE assets SET downvotes = downvotes + 1 "
                 "WHERE id = %s", (asset_id))
-    return send_json({"msg": "choice made"}, 200)
+    return jsonify({"msg": "choice made"}), 200
 
 
 @APP.route('/match', methods=['GET'])
@@ -213,7 +133,7 @@ def route_match():
     """Match route"""
     user = request.args.get('user')
     if user is None:
-        return send_json({"msg": f"user missing"}, 401)
+        return jsonify({"msg": f"user missing"}), 401
     with get_connection().cursor() as cur:
         cur.execute(
             "SELECT s2.user_uuid FROM swipes s1 "
@@ -225,14 +145,14 @@ def route_match():
             "ORDER BY SUM(s1.choice = s2.choice) - "
             "SUM(s1.choice != s2.choice)", (user, user))
         matches = list(map(lambda val: val[0], cur.fetchall()))
-        return send_json(matches, 200)
+        return jsonify(matches), 200
 
 
 @APP.route('/image', methods=['GET'])
 def route_image():
     asset_id = request.args.get('asset_id')
     if asset_id is None:
-        return send_json({"msg": "missing asset_id"})
+        return jsonify({"msg": "missing asset_id"}), 200
     with get_connection().cursor() as cur:
         cur.execute(
             "SELECT image FROM assets "
@@ -254,13 +174,11 @@ def route_suggest():
     user = request.args.get('user')
     match = request.args.get('match')
     if user is None or match is None:
-        return send_json({"msg": "must have user and match"}, 401)
-    return send_json({"msg": "not yet implemented"}, 500)
+        return jsonify({"msg": "must have user and match"}), 401
+    return jsonify({"msg": "not yet implemented"}), 500
 
 
 @APP.errorhandler(500)
 def internal_server_error():
     """Send json on status 500."""
-    return send_json({
-        "msg": f"an internal server error happened. sorry!"
-    }, 500)
+    return jsonify({"msg": f"an internal server error happened. sorry!"}), 500
