@@ -2,6 +2,9 @@
 
 import requests
 import random
+import json
+
+from app.models import CultureItem
 
 
 class Natmus():
@@ -18,12 +21,7 @@ class Natmus():
         collection = hit['_source']['collection']
         asset_id = f"{self.prefix}-{collection}-{local_id}"
         title = hit['_source']['text']['da-DK']['title']
-        return {
-            'id': local_id,
-            'collection': collection,
-            'asset_id': asset_id,
-            'title': title
-        }
+        return CultureItem(local_id=asset_id, title=title)
 
     def fetch_image(self, asset_id):
         """Fetch an image."""
@@ -33,10 +31,10 @@ class Natmus():
         if rsp.status_code == 200:
             return rsp.content
 
-    def fetch_assets(self):
+    def fetch_assets(self, count):
         """Fetch assets from API."""
         es_data = {
-            "size": 10,
+            "size": count,
             "query": {
                 "bool": {
                     "filter": {
@@ -64,3 +62,11 @@ class Natmus():
             headers={"Content-Type": "application/json"})
         results = req.json()
         return list(map(self.map_asset, results['hits']['hits']))
+
+
+def get_culture_items(user, count):
+    culture_items = []
+    while len(culture_items) < count:
+        count = count - len(culture_items)
+        culture_items += Natmus().fetch_assets(count)
+    return culture_items
