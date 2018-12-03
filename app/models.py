@@ -1,5 +1,6 @@
 from flask_sqlalchemy import SQLAlchemy
 from flask_security import UserMixin
+from sqlalchemy.ext.hybrid import hybrid_property
 
 from datetime import datetime
 
@@ -25,10 +26,20 @@ class User(DB.Model, UserMixin):
     first_name = DB.Column(DB.String(64))
     last_name = DB.Column(DB.String(64))
     email = DB.Column(DB.String(255), unique=True, index=True)
+    active = DB.Column(DB.Boolean)
+    password_hash = DB.Column(DB.String(23))
     facebook_linked = DB.Column(DB.Boolean)
     google_linked = DB.Column(DB.Boolean)
     avatar_url = DB.Column(DB.String(255))
     swipes = DB.relationship('Swipe', back_populates='user')
+
+    @hybrid_property
+    def roles(self):
+        return []
+
+    @roles.setter
+    def roles(self, role):
+        pass
 
     def __repr__(self):
         return f"<User {self.id} {self.email}>"

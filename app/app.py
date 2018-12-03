@@ -15,8 +15,12 @@ def setup_app():
     app = Flask(__name__)
     app.config.from_object(Config)
     app.config.from_envvar('ARTSWIPE_CONFIG', silent=True)
-    app.add_url_rule('/graphql', view_func=GraphQLView.as_view('graphql', schema=SCHEMA, graphiql=False))
-    app.add_url_rule('/graphiql', view_func=GraphQLView.as_view('graphqli', schema=SCHEMA, graphiql=True))
+    app.add_url_rule('/graphql', view_func=GraphQLView.as_view('graphql',
+                                                               schema=SCHEMA,
+                                                               graphiql=False))
+    app.add_url_rule('/graphiql', view_func=GraphQLView.as_view('graphqli',
+                                                                schema=SCHEMA,
+                                                                graphiql=True))
     CORS(app)
     DB.init_app(app)
     app.register_blueprint(ROUTES)
@@ -29,4 +33,5 @@ def setup_migrate(app):
 
 def setup_security(app):
     user_datastore = SQLAlchemyUserDatastore(DB, User, None)
-    return Security(app, user_datastore)
+    security = Security(app, user_datastore)
+    return security
