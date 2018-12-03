@@ -14,10 +14,10 @@ class Swipe(DB.Model):
     choice = DB.Column(DB.Boolean, index=True)
     timestamp = DB.Column(DB.DateTime, index=True, default=datetime.utcnow())
     user = DB.relationship('User', back_populates='swipes')
-    culture_item = DB.relationship('CultureItem', back_populates='swipes')
+    culture = DB.relationship('CultureItem', back_populates='swipes')
 
     def __repr__(self):
-        return f"<Swipe {self.culture_item} {self.user} {self.choice}>"
+        return f"<Swipe {self.culture} {self.user} {self.choice}>"
 
 
 class User(DB.Model, UserMixin):
@@ -41,7 +41,7 @@ class CultureItem(DB.Model):
     image = DB.Column(DB.LargeBinary)
     upvotes = DB.Column(DB.Integer)
     downvotes = DB.Column(DB.Integer)
-    swipes = DB.relationship('Swipe', back_populates='culture_item')
+    swipes = DB.relationship('Swipe', back_populates='culture')
 
     def __repr__(self):
         return f"<Asset {self.id}>"

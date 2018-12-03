@@ -30,6 +30,7 @@ class CultureItem(SQLAlchemyObjectType):
 class Swipe(SQLAlchemyObjectType):
     class Meta:
         model = models.Swipe
+        exclude_fields = ['culture_item_id', 'user_id']
 
 
 class SwipeCulture(graphene.Mutation):
@@ -38,15 +39,14 @@ class SwipeCulture(graphene.Mutation):
         culture = graphene.NonNull(graphene.ID)
         choice = graphene.NonNull(graphene.Boolean)
 
-    ok = graphene.Boolean()
+    swipe = Swipe
 
     def mutate(self, info, user, culture, choice):
         swipe = models.Swipe(culture_item_id=culture,
                              user_id=user, choice=choice)
         models.DB.session.add(swipe)
         models.DB.session.commit()
-        ok = True
-        return SwipeCulture(ok=ok)
+        return SwipeCulture(swipe=Swipe)
 
 
 class Mutation(graphene.ObjectType):
