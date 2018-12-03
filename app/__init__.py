@@ -1,16 +1,5 @@
-from flask import Flask
-from flask_cors import CORS
-from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate
+from app.app import setup_app, setup_migrate, setup_security
 
-from config import Config
-
-APP = Flask(__name__)
-APP.config.from_object(Config)
-APP.config.from_envvar('ARTSWIPE_CONFIG', silent=True)
-
-CORS(APP)
-DB = SQLAlchemy(APP)
-MIGRATE = Migrate(APP, DB)
-
-from app import models, routes
+APP = setup_app()
+MIGRATE = setup_migrate(APP)
+SECURITY = setup_security(APP)
