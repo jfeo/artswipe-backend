@@ -3,6 +3,7 @@ author: jfeo
 email: jensfeodor@gmail.com
 """
 from flask import request, Blueprint, jsonify
+from flask_security import auth_token_required
 
 from .schema import SCHEMA
 

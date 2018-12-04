@@ -1,11 +1,14 @@
 import graphene
 from graphene_sqlalchemy import SQLAlchemyObjectType
 from sqlalchemy import and_
+from flask_security.forms import LoginForm
+from werkzeug.datastructures import MultiDict
 
 from random import randint
 
 import app.models as models
 import app.api as api
+from app.security import USER_DATASTORE, AuthError
 
 
 class Match(graphene.ObjectType):
@@ -49,16 +52,109 @@ class SwipeCulture(graphene.Mutation):
         return swipe
 
 
+class CreateUser(graphene.Mutation):
+    class Arguments:
+        first_name = graphene.NonNull(graphene.String)
+        last_name = graphene.NonNull(graphene.String)
+        email = graphene.NonNull(graphene.String)
+        password = graphene.NonNull(graphene.String)
+
+    Output = User
+
+    def mutate(self, info, first_name, last_name, email, password):
+        user = USER_DATASTORE.create_user(email=email,
+                                          password=password,
+                                          first_name=first_name,
+                                          last_name=last_name)
+        models.DB.session.commit()
+        return user
+
+
+auth_unions = {}
+
+
+def auth_error_union(*types_):
+    _types = list(types_) + [AuthError]
+
+    name = "Union"
+    for t in _types:
+        if hasattr(t, '_meta'):
+            name += t._meta.name
+        else:
+            name += t.__class__.__name__
+
+    if name in auth_unions:
+        return auth_unions[name]
+
+    class _Union(graphene.Union):
+        class Meta:
+            types = _types
+
+    _Union.__name__ = name
+    auth_unions[name] = _Union
+    return _Union
+
+
+class AuthToken(graphene.ObjectType):
+    value = graphene.String(required=True)
+
+
+class AuthTokenError(graphene.Union):
+    class Meta:
+        types = [AuthToken, AuthError]
+
+
+class ObtainToken(graphene.Mutation):
+    class Arguments:
+        email = graphene.String(required=True)
+        password = graphene.String(required=True)
+
+    Output = AuthTokenError
+
+    def mutate(self, info, email, password):
+        form = LoginForm(formdata=MultiDict(
+            [('email', email), ('password', password)]))
+        if form.validate():
+            return AuthToken(value=form.user.get_auth_token())
+        else:
+            raise AuthError(message="Could not authorize")
+
+
+class VerifyToken(graphene.Mutation):
+    class Arguments:
+        token = graphene.String(required=True)
+
+    Output = auth_error_union(AuthToken)
+
+    def mutate(self, info, token):
+        return AuthError(message="Not authorized")
+
+
+class RefreshToken(graphene.Mutation):
+    class Arguments:
+        auth_token = graphene.String(required=True)
+
+    Output = auth_error_union(AuthToken)
+
+    def mutate(self, info, token):
+        return AuthError(message="Not authorized")
+
+
 class Mutation(graphene.ObjectType):
     swipe_culture = SwipeCulture.Field()
+    create_user = CreateUser.Field()
+    obtain_token = ObtainToken.Field()
+    verify_token = VerifyToken.Field()
+    refresh_token = RefreshToken.Field()
 
 
 class Query(graphene.ObjectType):
-    user = graphene.Field(User, id=graphene.ID())
-    matches = graphene.List(Match, author=graphene.ID())
-    culture = graphene.List(
-        CultureItem, user=graphene.ID(), count=graphene.Int())
-    swipes = graphene.List(Swipe, user=graphene.ID())
+    user = auth_error_union(User)
+    matches = auth_error_union(graphene.List(Match))
+    culture = auth_error_union(graphene.List(
+        CultureItem, count=graphene.Int()))
+    swipes = auth_error_union(graphene.List(
+        Swipe, user=graphene.ID()))
 
     def resolve_user(self, info):
         query = User.get_query(info)
@@ -92,11 +188,12 @@ class Query(graphene.ObjectType):
         agree = models.DB.func.sum(swipe.choice == other_swipe.choice)
         disagree = models.DB.func.sum(swipe.choice != other_swipe.choice)
         q = q.order_by(agree - disagree)
-        matches = [Match(author=swipe.user, match_user=match_user, read=False, seen=False, created_at=0) for  (swipe, match_user) in q.all()]
+        matches = [Match(author=swipe.user, match_user=match_user, read=False,
+                         seen=False, created_at=0) for (swipe, match_user) in q.all()]
         return matches
 
     def resolve_swipes(self, info, user):
         return Swipe.get_query(info).filter_by(user_id=user).all()
 
 
-SCHEMA = graphene.Schema(query=Query, mutation=Mutation)
+SCHEMA = graphene.Schema(query=Query)
