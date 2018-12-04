@@ -60,9 +60,9 @@ class Query(graphene.ObjectType):
         CultureItem, user=graphene.ID(), count=graphene.Int())
     swipes = graphene.List(Swipe, user=graphene.ID())
 
-    def resolve_user(self, info):
-        query = User.get_query(info)
-        return query.one()
+    def resolve_user(self, info, id):
+        query = User.get_query(info).filter(models.User.id == id)
+        return query.one_or_none()
 
     def resolve_culture(self, info, count=None, user=None):
         if count is None:
