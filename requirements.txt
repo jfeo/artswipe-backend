@@ -1,0 +1,11 @@
+Flask
+flask-cors
+flask-graphql
+flask-security
+flask-sqlalchemy
+flask-migrate
+graphene
+graphene-sqlalchemy
+requests
+pymysql
+uwsgi

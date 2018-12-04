@@ -11,7 +11,7 @@ services:
         ports:
             - "3306:3306"
         volumes:
-            - ./mysql:/docker-entrypoint-initdb.d
+            - ./config:/config
         environment:
             MYSQL_USER: "asadmin"
             MYSQL_PASSWORD: "asrocks"
