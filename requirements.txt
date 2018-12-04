@@ -9,3 +9,4 @@ graphene-sqlalchemy
 requests
 pymysql
 uwsgi
+bcrypt
