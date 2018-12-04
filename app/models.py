@@ -26,13 +26,14 @@ class User(DB.Model, UserMixin):
     first_name = DB.Column(DB.String(64))
     last_name = DB.Column(DB.String(64))
     email = DB.Column(DB.String(255), unique=True, index=True)
-    active = DB.Column(DB.Boolean)
-    password_hash = DB.Column(DB.String(23))
-    facebook_linked = DB.Column(DB.Boolean)
-    google_linked = DB.Column(DB.Boolean)
+    active = DB.Column(DB.Boolean, default=True)
+    password = DB.Column(DB.String(60))
+    facebook_linked = DB.Column(DB.Boolean, default=False)
+    google_linked = DB.Column(DB.Boolean, default=False)
     avatar_url = DB.Column(DB.String(255))
     swipes = DB.relationship('Swipe', back_populates='user')
 
+    # to ignore roles in flask-security
     @hybrid_property
     def roles(self):
         return []

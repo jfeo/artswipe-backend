@@ -19,7 +19,7 @@ class Match(graphene.ObjectType):
 class User(SQLAlchemyObjectType):
     class Meta:
         model = models.User
-        exclude_fields = ['password_hash']
+        exclude_fields = ['password']
 
 
 class CultureItem(SQLAlchemyObjectType):
