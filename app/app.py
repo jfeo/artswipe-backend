@@ -8,7 +8,7 @@ from app.routes import ROUTES
 from app.config import Config
 from app.models import DB
 from app.schema import SCHEMA
-from app.security import SECURITY, USER_DATASTORE, TokenMiddleware
+from app.security import SECURITY, USER_DATASTORE
 
 
 def setup_app():
@@ -18,8 +18,8 @@ def setup_app():
     app.template_folder = app.config.get('TEMPLATE_FOLDER')
     graphql_view = GraphQLView.as_view('graphql',
                                        schema=SCHEMA,
-                                       graphiql=False,
-                                       middleware=[TokenMiddleware])
+                                       graphiql=False
+                                       )
     app.add_url_rule('/graphql', view_func=graphql_view)
     graphiql_view = GraphQLView.as_view('graphqli',
                                         schema=SCHEMA,
